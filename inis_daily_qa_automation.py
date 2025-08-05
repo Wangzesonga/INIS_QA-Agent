@@ -9,7 +9,6 @@ Main orchestration script that:
 3. Sends summary report via email to IAEA feedback team
 4. Includes QA results as email attachments instead of saving locally
 
-Author: Brian Bales (automated by Claude)
 """
 
 import os
