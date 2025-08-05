@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""
+INIS Daily QA Automation System for GitHub Actions
+=================================================
+
+Main orchestration script that:
+1. Runs QA checks on yesterday's records
+2. Applies automatic corrections to fixable issues
+3. Sends summary report via email to IAEA feedback team
+4. Includes QA results as email attachments instead of saving locally
+
+Author: Brian Bales (automated by Claude)
+"""
+
+import os
+import sys
+import json
+import logging
+import shutil
+import subprocess
+import tempfile
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional
+import argparse
+
+# Import our custom modules
+from qa_email_sender import send_qa_report
+from auto_correction_processor import AutoCorrectionProcessor
+
+class INISQAAutomation:
+    def __init__(self, config_path: Optional[str] = None):
+        """Initialize the QA automation system."""
+        self.setup_logging()
+        self.logger = logging.getLogger(__name__)
+        self.load_config(config_path)
+        
+        # Use temporary directories for GitHub Actions
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="inis_qa_"))
+        self.qa_results_dir = self.temp_dir / "QAResults"
+        self.corrected_records_dir = self.temp_dir / "CorrectedRecords"
+        
+    def setup_logging(self):
+        """Configure logging for the automation system."""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        
+    def load_config(self, config_path: Optional[str] = None):
+        """Load configuration from environment variables."""
+        self.config = {
+            "invenio_url": "https://inis.iaea.org",
+            "email": {
+                "smtp_server": os.getenv("SMTP_SERVER", "smtp.gmail.com"),
+                "smtp_port": int(os.getenv("SMTP_PORT", "587")),
+                "from_email": os.getenv("FROM_EMAIL"),
+                "to_email": os.getenv("TO_EMAIL", "inis.feedback@iaea.org"),
+                "app_password": os.getenv("EMAIL_APP_PASSWORD")
+            },
+            "azure_openai": {
+                "endpoint_url": os.getenv("ENDPOINT_URL", "https://pdf2json.openai.azure.com/"),
+                "deployment_name": os.getenv("DEPLOYMENT_NAME", "o4-mini"),
+                "api_version": "2025-01-01-preview",
+                "api_key": os.getenv("AZURE_OPENAI_API_KEY")
+            }
+        }
+        
+        # Validate required environment variables
+        required_vars = [
+            "AZURE_OPENAI_API_KEY",
+            "FROM_EMAIL", 
+            "EMAIL_APP_PASSWORD"
+        ]
+        
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        if missing_vars:
+            raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+                
+    def get_yesterday_date(self) -> str:
+        """Get yesterday's date in ISO format."""
+        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        
+    def create_dated_directory(self, base_path: Path, date: str, suffix: str = "") -> Path:
+        """Create a dated directory for organizing results."""
+        dir_name = f"QAResults-{date}" if not suffix else f"{suffix}-{date}"
+        dated_dir = base_path / dir_name
+        dated_dir.mkdir(parents=True, exist_ok=True)
+        return dated_dir
+        
+    def run_qa_checker(self, date: Optional[str] = None) -> bool:
+        """Run the QA checker script."""
+        if not date:
+            date = self.get_yesterday_date()
+            
+        qa_date_dir = self.create_dated_directory(self.qa_results_dir, date)
+        
+        try:
+            self.logger.info(f"Starting QA check for date: {date}")
+            
+            # Set up environment variables for the QA checker
+            env = os.environ.copy()
+            azure_config = self.config.get("azure_openai", {})
+            env["ENDPOINT_URL"] = azure_config.get("endpoint_url", "https://pdf2json.openai.azure.com/")
+            env["DEPLOYMENT_NAME"] = azure_config.get("deployment_name", "o4-mini")
+            env["AZURE_OPENAI_API_KEY"] = azure_config.get("api_key", "")
+            env["QA_INSTRUCTIONS_FILE"] = "instructions.txt"
+            
+            # Prepare the command
+            cmd = [
+                sys.executable, "o4-INISQAChecker.py",
+                "--live", self.config["invenio_url"],
+                "--out", str(qa_date_dir),
+                "--date", date
+            ]
+            
+            self.logger.info(f"Running command: {' '.join(cmd)}")
+            self.logger.info(f"Azure OpenAI Endpoint: {env['ENDPOINT_URL']}")
+            self.logger.info(f"Azure OpenAI Deployment: {env['DEPLOYMENT_NAME']}")
+            
+            # Run the QA checker
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=Path(__file__).parent,
+                env=env
+            )
+            
+            if result.returncode == 0:
+                self.logger.info("QA checker completed successfully")
+                self.logger.info(f"Output: {result.stdout}")
+                return True
+            else:
+                self.logger.error(f"QA checker failed with return code {result.returncode}")
+                self.logger.error(f"Error output: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error running QA checker: {e}")
+            return False
+            
+    def process_corrections(self, date: Optional[str] = None) -> bool:
+        """Process and apply automatic corrections."""
+        if not date:
+            date = self.get_yesterday_date()
+            
+        qa_date_dir = self.qa_results_dir / f"QAResults-{date}"
+        corrected_date_dir = self.create_dated_directory(
+            self.corrected_records_dir, 
+            date, 
+            "QAChecked"
+        )
+        
+        try:
+            self.logger.info(f"Processing corrections for date: {date}")
+            
+            # Initialize the correction processor
+            processor = AutoCorrectionProcessor(
+                self.config["invenio_url"],
+                str(corrected_date_dir),
+                self.config.get("azure_openai", {})
+            )
+            
+            # Process all QA report files
+            if qa_date_dir.exists():
+                report_files = list(qa_date_dir.glob("*-report.json"))
+                self.logger.info(f"Found {len(report_files)} QA reports to process")
+                
+                corrections_applied = processor.process_qa_reports(report_files)
+                
+                self.logger.info(f"Applied {corrections_applied} corrections")
+                return True
+            else:
+                self.logger.warning(f"QA results directory not found: {qa_date_dir}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error processing corrections: {e}")
+            return False
+            
+    def send_daily_report(self, date: Optional[str] = None) -> bool:
+        """Send the daily QA report via email with attachments."""
+        if not date:
+            date = self.get_yesterday_date()
+            
+        qa_date_dir = self.qa_results_dir / f"QAResults-{date}"
+        
+        try:
+            self.logger.info(f"Sending daily report for date: {date}")
+            
+            if qa_date_dir.exists():
+                success = send_qa_report(
+                    str(qa_date_dir),
+                    self.config["email"],
+                    date
+                )
+                
+                if success:
+                    self.logger.info("Daily report sent successfully")
+                    return True
+                else:
+                    self.logger.error("Failed to send daily report")
+                    return False
+            else:
+                self.logger.error(f"QA results directory not found: {qa_date_dir}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error sending daily report: {e}")
+            return False
+            
+    def cleanup_temp_files(self):
+        """Clean up temporary files."""
+        try:
+            if self.temp_dir.exists():
+                shutil.rmtree(self.temp_dir)
+                self.logger.info("Cleaned up temporary files")
+        except Exception as e:
+            self.logger.error(f"Error cleaning up temporary files: {e}")
+            
+    def run_daily_automation(self, date: Optional[str] = None) -> bool:
+        """Run the complete daily automation workflow."""
+        if not date:
+            date = self.get_yesterday_date()
+            
+        self.logger.info(f"Starting daily QA automation for {date}")
+        
+        success = True
+        
+        try:
+            # Step 1: Run QA checker
+            if not self.run_qa_checker(date):
+                self.logger.error("QA checker failed - aborting automation")
+                return False
+                
+            # Step 2: Process corrections
+            if not self.process_corrections(date):
+                self.logger.warning("Correction processing failed - continuing with email")
+                success = False
+                
+            # Step 3: Send daily report (includes attachments)
+            if not self.send_daily_report(date):
+                self.logger.error("Failed to send daily report")
+                success = False
+                
+            if success:
+                self.logger.info("Daily QA automation completed successfully")
+            else:
+                self.logger.warning("Daily QA automation completed with some errors")
+                
+            return success
+            
+        finally:
+            # Always cleanup temporary files
+            self.cleanup_temp_files()
+
+def main():
+    """Main entry point for the automation script."""
+    parser = argparse.ArgumentParser(description="INIS Daily QA Automation System for GitHub Actions")
+    parser.add_argument("--date", help="Date to process (YYYY-MM-DD), defaults to yesterday")
+    parser.add_argument("--qa-only", action="store_true", help="Run only QA checking")
+    parser.add_argument("--corrections-only", action="store_true", help="Run only corrections processing")
+    parser.add_argument("--email-only", action="store_true", help="Run only email sending")
+    
+    args = parser.parse_args()
+    
+    try:
+        # Initialize the automation system
+        automation = INISQAAutomation()
+        
+        if args.qa_only:
+            success = automation.run_qa_checker(args.date)
+        elif args.corrections_only:
+            success = automation.process_corrections(args.date)
+        elif args.email_only:
+            success = automation.send_daily_report(args.date)
+        else:
+            # Run full automation
+            success = automation.run_daily_automation(args.date)
+            
+        sys.exit(0 if success else 1)
+        
+    except KeyboardInterrupt:
+        logging.getLogger(__name__).info("Automation interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Unexpected error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
