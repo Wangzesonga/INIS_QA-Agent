@@ -172,10 +172,6 @@ See `requirements.txt` for Python dependencies. The system uses:
 - `requests>=2.28.0` for HTTP requests
 - `python-dateutil>=2.8.0` for date handling
 
-## License
-
-[Add your license information here]
-
 ## Support
 
 For issues and questions:
