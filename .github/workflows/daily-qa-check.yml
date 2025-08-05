@@ -3,7 +3,7 @@ name: Daily INIS QA Check
 on:
   schedule:
     # Run daily at 6:00 AM UTC (adjust timezone as needed)
-    - cron: '31 16 * * *'
+    - cron: '31 14 * * *'
   workflow_dispatch:
     inputs:
       date:
