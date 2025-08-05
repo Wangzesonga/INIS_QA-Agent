@@ -6,7 +6,6 @@ QA Email Sender Module
 Sends QA check results to the IAEA feedback team with improved formatting
 and error handling.
 
-Author: Brian Bales (enhanced by Claude)
 """
 
 import os
