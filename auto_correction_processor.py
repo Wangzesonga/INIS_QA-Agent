@@ -5,8 +5,6 @@ Auto Correction Processor
 
 Processes QA reports and applies automatic corrections to records where possible.
 Saves corrected records to dated folders for review and potential upload.
-
-Author: Brian Bales (enhanced by Claude)
 """
 
 import os
