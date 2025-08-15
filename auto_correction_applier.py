@@ -57,6 +57,7 @@ class INISCorrectionApplier:
             "errors": 0
         }
         
+        print("** DRY RUN MODE **" if dry_run else "** APPLYING CHANGES **", flush=True)
         logger.info("** DRY RUN MODE **" if dry_run else "** APPLYING CHANGES **")
         
     def curl_get(self, url: str) -> Dict:
@@ -240,7 +241,7 @@ class INISCorrectionApplier:
                 publish_url = f"{draft_url}/actions/publish"
                 pub_resp = self.curl_post(publish_url)
                 
-                if "id" in json.loads(pub_resp) if pub_resp else {}:
+                if pub_resp and "id" in pub_resp:
                     logger.info(f"✅ Published {record_id}")
                     self.stats["records_updated"] += 1
                     return True

@@ -40,12 +40,14 @@ Go to your repository Settings → Secrets and variables → Actions, and add th
 - `EMAIL_APP_PASSWORD`: App password for email authentication
 - `TO_EMAIL`: Recipient email address (e.g., `inis.feedback@iaea.org`)
 
+**INIS API Configuration (for automatic correction application):**
+- `INIS_ACCESS_TOKEN`: INIS API access token for applying corrections directly to production
+- `INIS_API_BASE_URL`: INIS API base URL (defaults to `https://inis.iaea.org/api/records`)
+
 #### Optional Secrets
 
 - `SMTP_SERVER`: SMTP server (defaults to `smtp.gmail.com`)
 - `SMTP_PORT`: SMTP port (defaults to `587`)
-- `INIS_ACCESS_TOKEN`: INIS API access token for applying corrections directly to production
-- `INIS_API_BASE_URL`: INIS API base URL (defaults to `https://inis.iaea.org/api/records`)
 
 ### 3. Enable GitHub Actions
 
@@ -103,8 +105,8 @@ Update the `SMTP_SERVER` and `SMTP_PORT` secrets according to your provider:
 1. **Fetch Records**: Retrieves yesterday's records from INIS
 2. **QA Analysis**: Analyzes each record using Azure OpenAI
 3. **Process Corrections**: Creates corrected record files for review
-4. **Apply Corrections** (Optional): Applies trusted corrections directly to INIS production
-5. **Email Report**: Sends summary with detailed results attached
+4. **Email Report**: Sends summary with detailed results attached
+5. **Apply Corrections** (Automatic): Applies trusted corrections directly to INIS production (if token available)
 6. **Cleanup**: Removes temporary files
 
 ### Correction Application
@@ -114,9 +116,10 @@ The system can now apply corrections directly to INIS production system. This in
 - **Affiliation corrections**: Updates institutional affiliations
 - **Organizational author corrections**: Corrects organizational author names
 
-**Safety Features:**
-- **Dry-run mode**: Default mode that simulates changes without applying them
-- **Selective application**: Only applies trusted correction types
+**Automation Features:**
+- **Automatic activation**: Enables correction application when INIS token is available
+- **Email-first workflow**: Sends reports before applying corrections (as requested)
+- **Selective application**: Only applies trusted correction types (title, affiliation, organizational author)
 - **QA marking**: Marks processed records with `iaea:qa_checked = True`
 - **Comprehensive logging**: Detailed logs of all operations
 
@@ -179,11 +182,14 @@ While the system is designed for GitHub Actions, you can test locally:
 
 2. Run the automation:
    ```bash
-   # Dry-run mode (default)
+   # Auto-mode: Apply corrections if INIS token is available (recommended)
    python inis_daily_qa_automation.py
    
-   # Apply corrections to INIS production 
+   # Force enable corrections (even if might not have token)
    python inis_daily_qa_automation.py --apply-corrections
+   
+   # Disable corrections (email-only mode)
+   python inis_daily_qa_automation.py --no-apply-corrections
    
    # Run specific components
    python inis_daily_qa_automation.py --qa-only

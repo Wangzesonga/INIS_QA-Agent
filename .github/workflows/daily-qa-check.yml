@@ -11,6 +11,11 @@ on:
         description: 'Date to process (YYYY-MM-DD, defaults to yesterday)'
         required: false
         type: string
+      apply_corrections:
+        description: 'Apply corrections to INIS production (requires INIS_ACCESS_TOKEN)'
+        required: false
+        type: boolean
+        default: false
   
 jobs:
   qa-check:
@@ -43,12 +48,31 @@ jobs:
         TO_EMAIL: ${{ secrets.TO_EMAIL }}
         SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
         SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        
+        # INIS API Configuration (for automatic correction application)
+        INIS_ACCESS_TOKEN: ${{ secrets.INIS_ACCESS_TOKEN }}
+        INIS_API_BASE_URL: ${{ secrets.INIS_API_BASE_URL }}
       run: |
+        # Build command with date parameter if provided
+        CMD="python inis_daily_qa_automation.py"
+        
         if [ -n "${{ github.event.inputs.date }}" ]; then
-          python inis_daily_qa_automation.py --date "${{ github.event.inputs.date }}"
-        else
-          python inis_daily_qa_automation.py
+          CMD="$CMD --date ${{ github.event.inputs.date }}"
         fi
+        
+        # Handle correction application option
+        if [ "${{ github.event.inputs.apply_corrections }}" = "true" ]; then
+          CMD="$CMD --apply-corrections"
+          echo "🔧 Force enabling correction application to INIS"
+        elif [ "${{ github.event.inputs.apply_corrections }}" = "false" ]; then
+          CMD="$CMD --no-apply-corrections"
+          echo "🛡️ Disabling correction application to INIS"
+        else
+          echo "🤖 Auto-mode: Will apply corrections if INIS token is available"
+        fi
+        
+        echo "Executing: $CMD"
+        $CMD
         
     - name: Upload logs on failure
       if: failure()

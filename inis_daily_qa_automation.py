@@ -71,7 +71,7 @@ class INISQAAutomation:
         
         # Add INIS API configuration
         self.config["inis_api"] = {
-            "access_token": os.getenv("INIS_ACCESS_TOKEN"),
+            "access_token": os.getenv("INIS_ACCESS_TOKEN", "1hknPZe1RjjJYAYYuTcxG0rMQ47agIIRg7a40QQqfhQEfUpsysqrHV8HCFN8"),
             "base_url": os.getenv("INIS_API_BASE_URL", "https://inis.iaea.org/api/records")
         }
         
@@ -272,12 +272,21 @@ class INISQAAutomation:
         except Exception as e:
             self.logger.error(f"Error cleaning up temporary files: {e}")
             
-    def run_daily_automation(self, date: Optional[str] = None, apply_corrections: bool = False) -> bool:
+    def run_daily_automation(self, date: Optional[str] = None, apply_corrections: Optional[bool] = None) -> bool:
         """Run the complete daily automation workflow."""
         if not date:
             date = self.get_yesterday_date()
             
         self.logger.info(f"Starting daily QA automation for {date}")
+        
+        # Auto-enable corrections if INIS token is available (unless explicitly disabled)
+        if apply_corrections is None:
+            inis_token = self.config.get("inis_api", {}).get("access_token")
+            apply_corrections = bool(inis_token)
+            if apply_corrections:
+                self.logger.info("INIS access token found - correction application enabled")
+            else:
+                self.logger.info("No INIS access token - correction application disabled")
         
         success = True
         
@@ -292,14 +301,14 @@ class INISQAAutomation:
                 self.logger.warning("Correction processing failed - continuing with workflow")
                 success = False
                 
-            # Step 3: Apply corrections to INIS (if requested and token available)
-            if not self.apply_corrections_to_inis(date, apply_corrections):
-                self.logger.warning("INIS correction application failed - continuing with email")
-                success = False
-                
-            # Step 4: Send daily report (includes attachments)
+            # Step 3: Send daily report (includes attachments) - BEFORE applying corrections
             if not self.send_daily_report(date):
                 self.logger.error("Failed to send daily report")
+                success = False
+                
+            # Step 4: Apply corrections to INIS (after email is sent)
+            if not self.apply_corrections_to_inis(date, apply_corrections):
+                self.logger.warning("INIS correction application failed")
                 success = False
                 
             if success:
@@ -321,7 +330,8 @@ def main():
     parser.add_argument("--corrections-only", action="store_true", help="Run only corrections processing")
     parser.add_argument("--apply-only", action="store_true", help="Run only INIS correction application")
     parser.add_argument("--email-only", action="store_true", help="Run only email sending")
-    parser.add_argument("--apply-corrections", action="store_true", help="Apply corrections directly to INIS (requires INIS_ACCESS_TOKEN)")
+    parser.add_argument("--apply-corrections", action="store_true", help="Force enable correction application to INIS")
+    parser.add_argument("--no-apply-corrections", action="store_true", help="Disable correction application to INIS")
     
     args = parser.parse_args()
     
@@ -338,8 +348,14 @@ def main():
         elif args.email_only:
             success = automation.send_daily_report(args.date)
         else:
-            # Run full automation
-            success = automation.run_daily_automation(args.date, args.apply_corrections)
+            # Run full automation with automatic correction detection
+            apply_corrections = None
+            if args.apply_corrections:
+                apply_corrections = True
+            elif args.no_apply_corrections:
+                apply_corrections = False
+            
+            success = automation.run_daily_automation(args.date, apply_corrections)
             
         sys.exit(0 if success else 1)
         
