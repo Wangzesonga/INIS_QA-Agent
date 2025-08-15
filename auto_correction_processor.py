@@ -143,16 +143,33 @@ class AutoCorrectionProcessor:
             
             if not descriptors:
                 return False
+            
+            # Handle both string and list formats
+            if isinstance(descriptors, str):
+                # Convert string format to list (split by semicolon or comma)
+                descriptor_list = [d.strip() for d in descriptors.replace(';', ',').split(',') if d.strip()]
+            elif isinstance(descriptors, list):
+                descriptor_list = descriptors[:]
+            else:
+                logger.warning(f"Unexpected descriptor format: {type(descriptors)}")
+                return False
                 
-            original_count = len(descriptors)
+            original_count = len(descriptor_list)
             
             # Remove specified descriptors (case-insensitive)
             deletions_lower = [d.lower() for d in deletions]
-            descriptors[:] = [d for d in descriptors if d.lower() not in deletions_lower]
+            filtered_descriptors = [d for d in descriptor_list if d.lower() not in deletions_lower]
             
-            removed_count = original_count - len(descriptors)
+            removed_count = original_count - len(filtered_descriptors)
             
             if removed_count > 0:
+                # Update the record with the filtered descriptors
+                # Keep original format: if it was string, convert back to string
+                if isinstance(descriptors, str):
+                    custom_fields["iaea:descriptors_cai_text"] = "; ".join(filtered_descriptors)
+                else:
+                    custom_fields["iaea:descriptors_cai_text"] = filtered_descriptors
+                    
                 logger.info(f"Removed {removed_count} descriptors: {deletions}")
                 return True
                 
