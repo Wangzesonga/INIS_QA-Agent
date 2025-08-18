@@ -51,6 +51,7 @@ class INISCorrectionApplier:
         self.stats = {
             "records_processed": 0,
             "records_updated": 0,
+            "records_qa_checked_only": 0,
             "title_corrections": 0,
             "affiliation_corrections": 0,
             "organizational_author_corrections": 0,
@@ -182,6 +183,60 @@ class INISCorrectionApplier:
             record_data["custom_fields"] = {}
         record_data["custom_fields"]["iaea:qa_checked"] = True
     
+    def mark_record_as_qa_checked_only(self, record_id: str) -> bool:
+        """Mark a record as QA checked without applying any other corrections."""
+        try:
+            logger.info(f"\nMarking {record_id} as QA checked...")
+            self.stats["records_processed"] += 1
+            
+            # Create draft
+            draft_url = f"{self.base_url}/{record_id}/draft"
+            draft_resp = self.curl_post(draft_url)
+            
+            if 'id' not in draft_resp:
+                logger.error(f"❌ Failed to create draft for {record_id}: {draft_resp}")
+                self.stats["errors"] += 1
+                return False
+            
+            # Get full draft data
+            full_draft = self.curl_get(draft_url)
+            if not full_draft:
+                logger.error(f"❌ Failed to get draft data for {record_id}")
+                self.stats["errors"] += 1
+                return False
+            
+            # Mark as QA checked
+            self.mark_qa_checked(full_draft)
+            
+            # Apply changes if not in dry-run mode
+            if not self.dry_run:
+                # Update draft
+                put_resp = self.curl_put(draft_url, full_draft)
+                
+                # Publish draft
+                publish_url = f"{draft_url}/actions/publish"
+                pub_resp = self.curl_post(publish_url)
+                
+                if pub_resp and "id" in pub_resp:
+                    logger.info(f"✅ Marked {record_id} as QA checked")
+                    self.stats["records_updated"] += 1
+                    self.stats["records_qa_checked_only"] += 1
+                    return True
+                else:
+                    logger.error(f"❌ Failed to publish {record_id}: {pub_resp}")
+                    self.stats["errors"] += 1
+                    return False
+            else:
+                logger.info(f"Dry-run: Would mark {record_id} as QA checked")
+                self.stats["records_updated"] += 1
+                self.stats["records_qa_checked_only"] += 1
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error marking record {record_id} as QA checked: {e}")
+            self.stats["errors"] += 1
+            return False
+    
     def update_record(self, record_id: str, corrections_data: Dict) -> bool:
         """Update a single record with corrections."""
         try:
@@ -229,8 +284,7 @@ class INISCorrectionApplier:
             self.mark_qa_checked(full_draft)
             
             if corrections_applied == 0:
-                logger.info(f"No applicable corrections found for {record_id}")
-                return False
+                logger.info(f"No corrections applied for {record_id}, but marking as QA checked")
             
             # Apply changes if not in dry-run mode
             if not self.dry_run:
@@ -293,7 +347,9 @@ class INISCorrectionApplier:
                     if has_applicable_corrections:
                         self.update_record(record_id, report_data)
                     else:
-                        logger.info(f"No applicable corrections for {record_id}")
+                        # Even if no corrections needed, still mark as QA checked
+                        logger.info(f"No corrections needed for {record_id}, but marking as QA checked")
+                        self.mark_record_as_qa_checked_only(record_id)
                         
                 except json.JSONDecodeError:
                     logger.error(f"⚠️ Invalid JSON in {json_file.name}")
